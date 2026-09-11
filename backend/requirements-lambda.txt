@@ -1,0 +1,35 @@
+# Runtime dependencies for the mock TMC Lambda bundle, pinned to exactly what
+# `backend/uv.lock` resolved — so the artifact deployed is the artifact the 203
+# backend tests ran against.
+#
+# **These were ranges, and a range here means the deploy is dated.** `pip` picks
+# the newest match at bundling time, so the same commit produces a different
+# Lambda next month, and a reader cloning this a year from now deploys a
+# dependency set nobody exercised. That is a worse failure for a sample than for
+# a product: there is no pipeline to catch it, and the person it breaks is
+# reading this repo to learn something else.
+#
+# **Keep in step with `uv.lock`.** `./test.sh` asserts these pins match the lock
+# (`scripts/check_lambda_pins.py`), so `uv lock` followed by a stale file fails
+# the gate rather than shipping. That gate did its job here: bumping the lock
+# without touching this file failed the suite rather than quietly deploying a
+# vulnerable bundle.
+#
+# The `fastapi<0.130` cap this file used to describe has been removed, and the
+# reasoning behind it was mistaken. See the note in `pyproject.toml`: starlette
+# 1.x nests included routes under `_IncludedRouter` rather than flattening them
+# into `app.routes`, so the probe that concluded `include_router` registers
+# nothing was reading the wrong place. Re-tested on fastapi 0.141.1 with
+# starlette 1.6.0, routing works, and all 217 backend tests pass. Holding the cap
+# would have kept starlette 0.52.1 and its seven advisories.
+fastapi==0.141.1
+starlette==1.6.0
+pydantic==2.13.4
+mangum==0.21.0
+aws-lambda-powertools==3.31.1
+
+# boto3 is provided by the Lambda runtime, so it is deliberately absent here —
+# shipping it would add ~15MB to the package for no gain. Transitive
+# dependencies (pydantic-core, anyio, h11, jmespath, …) are resolved by pip from
+# these pins; pinning them too would mean regenerating this file by hand on
+# every lock change, and the direct pins are what determine behavior.

@@ -1,0 +1,12 @@
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+Licensed under the MIT No Attribution license (MIT-0). See the LICENSE file in
+this repository for the full text.
+
+Third-party dependencies are listed with their licenses in THIRD-PARTY-LICENSES.
+
+This is sample code, published to demonstrate how the services it uses fit
+together. It is not an Amazon Web Services product, it carries no support
+commitment, and it is not intended to be deployed as-is into production without
+review against your own security, compliance and operational requirements. AWS
+service names and trademarks belong to Amazon.com, Inc. or its affiliates.
