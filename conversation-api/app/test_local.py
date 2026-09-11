@@ -210,6 +210,14 @@ def check_document_authorization() -> None:
     # instead: what is being asserted is the tenant prefix and the expiry in the URL, and neither
     # depends on the key being real. The client is built lazily on this first call, so setting these
     # now is enough.
+    #
+    # **This mutates the environment for the rest of the process, which is safe only because this
+    # module is run standalone** (`python -m app.test_local`). If these checks are ever folded into
+    # an in-process suite alongside others, replace this with a scoped client carrying explicit
+    # throwaway credentials. It is done this way rather than assigning `documents._s3` directly so
+    # that the code under test still builds its own client: that construction pins SigV4 for the
+    # reason given in `documents._client`, and a test that supplied its own client could pass while
+    # production signed differently.
     if boto3.Session().get_credentials() is None:
         os.environ.setdefault("AWS_ACCESS_KEY_ID", "offline-signing-only")
         os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "offline-signing-only")
