@@ -1,0 +1,167 @@
+suite: A
+title: Policy Q&A from the knowledge base
+resolved_when: >
+  Answered from that tenant's own policy prose, with the other tenant's numbers absent, and
+  "I don't have that" when the knowledge base genuinely does not cover it.
+
+tasks:
+  - id: A1
+    title: The hotel cap, asked identically by both tenants
+    prompt: What is my hotel nightly cap?
+    personas: [priya, sam]
+    expect:
+      tools:
+        required_any: [get_travel_policy]
+        forbidden: [confirm_booking, cancel_reservation, prepare_booking]
+      by_persona:
+        priya:
+          must_mention: ["250"]
+          must_not_mention: ["150", "initech", "Initech"]
+        sam:
+          must_mention: ["150"]
+          must_not_mention: ["250", "globex", "Globex"]
+
+  - id: A2
+    title: The cabin rule, where the two policies are opposites
+    prompt: When am I allowed to fly business class?
+    personas: [priya, sam]
+    expect:
+      tools:
+        required_any: [get_travel_policy]
+      by_persona:
+        priya:
+          # Globex permits business on every 4th international trip in a calendar year.
+          must_mention: ["4"]
+          must_not_mention: ["economy only", "initech"]
+        sam:
+          # Initech is economy only, with no entitlement to earn.
+          must_mention: ["economy"]
+          must_not_mention: ["every 4th", "globex"]
+
+  - id: A3
+    title: A paraphrase of the same question, so retrieval is not keyword luck
+    prompt: How much can I spend on a room per night before it breaks the rules?
+    personas: [priya, sam]
+    expect:
+      tools:
+        required_any: [get_travel_policy]
+      by_persona:
+        priya:
+          must_mention: ["250"]
+          must_not_mention: ["150"]
+        sam:
+          must_mention: ["150"]
+          must_not_mention: ["250"]
+
+  - id: A4
+    title: A rule only one tenant has
+    prompt: Do I need to book flights a certain number of days in advance?
+    personas: [priya, sam]
+    expect:
+      tools:
+        required_any: [get_travel_policy]
+      by_persona:
+        sam:
+          must_mention: ["7"]
+        priya:
+          # Globex sets no advance-purchase requirement, and the honest answer says so rather than
+          # borrowing Initech's number — the failure mode this pair exists to catch.
+          must_not_mention: ["7 days", "seven days"]
+
+  - id: A5
+    title: The star-rating limit
+    prompt: What star rating of hotel am I allowed to book?
+    personas: [priya, sam]
+    expect:
+      tools:
+        required_any: [get_travel_policy]
+      by_persona:
+        priya:
+          must_mention: ["4"]
+          must_not_mention: ["3-star", "three star"]
+        sam:
+          must_mention: ["3"]
+          must_not_mention: ["4-star", "four star"]
+
+  # **The positive control on retrieval, and the version this replaces did not work.**
+  #
+  # It asked about in-flight wifi and accepted either `get_travel_policy` or
+  # `search_policy_knowledge`. But the wifi rule exists in *both* stores: `seed/tenants.py`
+  # carries it as a `PolicyRule` description ("over 3 hours") and the document carries it as
+  # prose ("exceeding three hours"). So the task passed whenever the model took the structured
+  # route, and the vector index could have been empty for the entire life of the suite without
+  # this task noticing. Which is exactly what happened.
+  #
+  # A positive control has to ask something only the document can answer, and require the tool
+  # that reads the document. Seat-selection fees appear in Globex 2.3 and in no `PolicyRule`, so
+  # a correct answer is only reachable through retrieval.
+  - id: A6
+    title: A fact only the policy document holds, so retrieval must run
+    prompt: How much can I claim back for seat selection?
+    personas: [priya, sam]
+    expect:
+      tools:
+        # A conjunction of one. `required_any` with a single entry would enforce exactly the same
+        # thing, and the flaw in the version this replaces was listing *two* acceptable tools, not
+        # the operator it used. `required_all` is here because it says what it means when a control
+        # needs more than one tool, and neither operator constrains what else ran: that is
+        # `forbidden`'s job.
+        required_all: [search_policy_knowledge]
+      by_persona:
+        priya:
+          # Globex 2.3: "Seat selection fees are reimbursable up to USD 60 per segment."
+          #
+          # `60` rather than a phrase from the document. The previous fixture asserted the digit
+          # `"3"` for a threshold the document spells "three", so it could fail correct answers
+          # and pass incorrect sentences containing a 3 for an unrelated reason. A currency figure
+          # survives paraphrase in a way a sentence does not.
+          must_mention: ["60", reimburs]
+          # **No absence assertion on this side, deliberately.** The only phrase that would mark
+          # Initech's answer leaking in is "not reimbursable", and Globex 2.3 uses those same words
+          # two sentences later for lounge access, so a correct answer that quotes the section
+          # would fail. The leak check for this question runs on Sam's side instead, where the
+          # forbidden value is a figure rather than a phrase.
+        sam:
+          # Initech 2.4: "Seat selection fees are not reimbursable." The same question, the
+          # opposite answer, which is the pair that makes this a retrieval control rather than a
+          # single lookup. A bare `reimburs` accepted both the positive and negative answer, so
+          # require one of the ordinary negative forms instead.
+          must_mention_one_of:
+            - "not reimburs"
+            - "aren't reimburs"
+            - "isn't reimburs"
+            - "not covered"
+            - "cannot claim"
+            - "can't claim"
+          # Globex's figure, in the forms a model writes it. Not a bare `60`: Initech's own claims
+          # window is "60 days after travel", so the bare digits are not tenant-discriminating.
+          must_not_mention: ["usd 60", "$60", "60 usd"]
+
+  - id: A7
+    title: Out of the knowledge base entirely
+    prompt: What is my company's parental leave allowance?
+    personas: [priya, sam]
+    expect:
+      tools:
+        forbidden: [confirm_booking, prepare_booking, cancel_reservation]
+      by_persona:
+        priya:
+          # The point is a refusal to invent, not a particular phrasing. Asserted as the absence of
+          # a fabricated figure rather than the presence of an apology, because a model that says
+          # "I don't have that" *and* then guesses would pass a phrasing check.
+          must_not_mention: ["weeks of leave", "days of leave"]
+        sam:
+          must_not_mention: ["weeks of leave", "days of leave"]
+
+  - id: A8
+    title: Adjacent to travel but outside the policy documents
+    prompt: What is the per-diem meal allowance in Tokyo?
+    personas: [priya]
+    expect:
+      tools:
+        forbidden: [confirm_booking, prepare_booking]
+      by_persona:
+        priya:
+          # Neither tenant's policy sets a per-diem. A number here is invention, and it is the
+          # plausible kind — which is why this sits beside A7 rather than replacing it.
+          must_not_mention: ["per diem is", "allowance is $", "allowance is €"]

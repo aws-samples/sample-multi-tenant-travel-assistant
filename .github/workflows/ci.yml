@@ -1,0 +1,99 @@
+# The offline half of this repository's verification, on every push and pull request.
+#
+# **Why this runs `./test.sh` and nothing else.** That script is already the boundary between checks
+# that need AWS credentials and checks that do not, and its header lists what it leaves out and why.
+# Duplicating any of it here would create a second definition of "the tests" that drifts from the one
+# contributors actually run. A contributor with a green `./test.sh` should see a green check, and the
+# only way to guarantee that is to run the same command.
+#
+# **What this deliberately cannot do.** The deployed `verify_*.py` suites need a real stack, and
+# `./run-evals.sh` spends real money on live model calls. Neither belongs on an automatic trigger:
+# `run-evals.sh` documents a published $3,900 overnight bill from an eval suite with no ceiling,
+# reached by a dependency bot opening pull requests into a merge queue that re-ran everything on every
+# push. This workflow requests no credentials, so it cannot spend anything even if someone adds a step
+# that tries.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+# A force-push or a quick second commit should cancel the run it superseded rather than queue behind
+# it. Grouped per ref so pull requests and branches do not cancel each other.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only. This workflow publishes nothing and comments nowhere, so the default write token is more
+# access than it needs.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: offline checks (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      # Both ends of the supported range, because the two ends fail differently. 22.18 is the floor
+      # the README states and the one a reader on LTS will have; 24 is current. This matrix was not
+      # decorative: pinning CI to Node 20 was tried first and `npm test` failed with
+      # `ERR_UNKNOWN_FILE_EXTENSION`, which is how the README's "20+" claim was found to be wrong.
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+
+    steps:
+      # `test.sh` scans tracked files as checked out, so this must be a real repository rather than
+      # an export. Depth 1 is sufficient for the ordinary test job.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # **22 is a hard floor, not a preference.** `frontend/tests/*.test.mjs` import the `.ts` sources
+      # directly and rely on Node stripping the types, which is on by default from 22.18.0 and was
+      # never backported to 20. Lowering this line breaks the frontend suite.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # `backend`, `tools` and `conversation-api` all declare `requires-python = ">=3.13"`.
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+
+      # Every Python suite runs through `uv run --frozen`, which fails rather than re-resolving if a
+      # lockfile does not match its `pyproject.toml`. That is the property worth having in CI: a green
+      # run means the pinned versions ran.
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+
+      - name: ./test.sh
+        run: ./test.sh
+
+  release-tag:
+    name: release tag points at main
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject a stale release tag
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          tag_commit="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          main_commit="$(git rev-parse origin/main)"
+          if [ "$tag_commit" != "$main_commit" ]; then
+            echo "::error::${GITHUB_REF_NAME} points at ${tag_commit}, but main is ${main_commit}"
+            exit 1
+          fi
+
+      - name: Check the exact tree being published
+        run: python3 scripts/check_publish_readiness.py "$GITHUB_REF_NAME"

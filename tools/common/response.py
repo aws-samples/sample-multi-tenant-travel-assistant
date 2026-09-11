@@ -1,0 +1,91 @@
+"""The response vocabulary every tool draws on.
+
+    {cards, facts, message, provenance}
+
+Four fields, each with one job, because the alternative — a tool that returns
+whatever shape suits it — puts the model in the position of interpreting structure,
+which is exactly what it is bad at.
+
+**A shared vocabulary, not a fixed shape.** `tool_response` below drops any field
+with nothing to say, so a given response carries only the populated ones. What is
+identical across tools is the meaning of each key, never the set of keys present.
+
+**`cards`** — typed, tool-authored UI components. The frontend renders them
+directly; the model never writes them. That buys UI and action integrity, not
+escaping: it keeps presentation separate from the machine-readable answer in
+`facts`, and stops the model naming a card type or an action the server will not
+honor. Escaping is the frontend's job and it applies to card fields and model
+prose equally — see `frontend/src/cards/CardView.tsx`.
+
+**`facts`** — computed values the model may *narrate but never derive*. Counts,
+caps, verdicts, arithmetic. A model that can compute a policy verdict can compute
+it wrong, so the code computes and the model phrases.
+
+**`message`** — prose for the cases where there is nothing to render: an empty
+result, a refusal, an error. Deliberately **not** a summary of the cards. An earlier
+draft had the tool write "3 in-policy hotels under your €180 cap", which is a
+sentence the user may never have asked for; `facts` lets the model decide what is
+worth saying.
+
+**`provenance`** — where the answer came from, so a claim can be traced to a source
+rather than trusted because it sounded confident.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+def tool_response(
+    *,
+    cards: list[dict[str, Any]] | None = None,
+    facts: dict[str, Any] | None = None,
+    message: str | None = None,
+    provenance: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Assemble a response, omitting the fields that have nothing to say.
+
+    Empty keys are dropped rather than sent as `null`/`[]`: every unused field is
+    context the model pays for on this step and on every step after it, and a
+    `"cards": []` invites the model to comment on an absence that is not
+    meaningful.
+    """
+    response: dict[str, Any] = {}
+    if cards:
+        response["cards"] = cards
+    if facts:
+        response["facts"] = facts
+    if message:
+        response["message"] = message
+    if provenance:
+        response["provenance"] = provenance
+    return response
+
+
+# **The marker that lets the runtime tell an outage from an answer.** It lives in `provenance`
+# rather than as a fifth top-level key, because provenance is already the field for "where this
+# came from" and the four-key vocabulary above is a contract rather than a habit.
+UPSTREAM_UNAVAILABLE = "upstream_unavailable"
+
+
+def refusal(
+    message: str,
+    *,
+    provenance: dict[str, Any] | None = None,
+    upstream_unavailable: bool = False,
+) -> dict[str, Any]:
+    """A clean "I can't answer that", with no cards and no facts.
+
+    A refusal must be indistinguishable in *shape* from a normal response so the
+    model handles it as an answer rather than a malfunction — but it carries no
+    facts, because inventing a plausible-looking one is the failure this prevents.
+
+    **`upstream_unavailable` is for the runtime, not the model.** Shape-identical refusals mean
+    nothing outside the model can tell "the tool answered, and the answer is no" from "the
+    dependency is down", and those need different endings: the first is a result, the second is a
+    reason to fetch a human rather than to offer the traveler another try. The prose stays the same;
+    the marker rides in `provenance` where the loop can count it.
+    """
+    if upstream_unavailable:
+        provenance = {**(provenance or {}), "error": UPSTREAM_UNAVAILABLE}
+    return tool_response(message=message, provenance=provenance)
