@@ -20,6 +20,8 @@ import os
 import sys
 from pathlib import Path
 
+import boto3
+
 # The app modules import each other flatly (they sit at the zip root in Lambda), and `shared` comes
 # from the repo root the way the tool bundles arrange it.
 HERE = Path(__file__).resolve().parent
@@ -201,8 +203,18 @@ def check_document_authorization() -> None:
     except documents.DocumentRefused:
         check("an unregistered doc_id is refused", True, "no caller-supplied keys")
 
-    # The paired acceptance. Signing needs no credentials to *construct* a URL, so this runs
-    # offline — botocore signs locally.
+    # The paired acceptance. **Presigning does need credentials**, even though it makes no network
+    # call, because the signature is keyed on the access key. An earlier comment here claimed the
+    # opposite and the `except` below recorded a failure whenever none were configured, so the suite
+    # passed on a developer laptop and failed in CI and on a first clone. Sign with throwaway values
+    # instead: what is being asserted is the tenant prefix and the expiry in the URL, and neither
+    # depends on the key being real. The client is built lazily on this first call, so setting these
+    # now is enough.
+    if boto3.Session().get_credentials() is None:
+        os.environ.setdefault("AWS_ACCESS_KEY_ID", "offline-signing-only")
+        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "offline-signing-only")
+        os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
+
     try:
         url = documents.presigned_url("pol_globex_2026", "globex")
         check(
